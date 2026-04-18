@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地图投影原理可视化与变形分析系统</title>
+    <!-- Tailwind CSS 布局 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 引入专业的 D3.js 及其扩展库 (用于 2D 展开变形) -->
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3-geo-projection@4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+
+    <!-- 引入 Three.js 及其控制器 (用于 3D 几何面原理演示) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    
+    <style>
+        .fade-in { animation: fadeIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+        @keyframes fadeIn {
+            0% { opacity: 0; transform: translateY(10px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+        
+        /* 导航及切换按钮样式 */
+        .nav-btn { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .nav-btn.active {
+            background-color: #2563eb; color: white;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+            font-weight: 600;
+            transform: translateY(-1px);
+        }
+        .nav-btn:not(.active):hover { background-color: #334155; color: white; }
+
+        .mode-btn { transition: all 0.2s; }
+        .mode-btn.active { background-color: #dbeafe; color: #1d4ed8; font-weight: 600; box-shadow: inset 0 0 0 1px #bfdbfe; }
+        .mode-btn:not(.active) { color: #475569; }
+        .mode-btn:not(.active):hover { background-color: #f1f5f9; }
+
+        /* 主模块切换 (2D / 3D) */
+        .main-tab-btn { transition: all 0.3s; position: relative; overflow: hidden; }
+        .main-tab-btn.active { background-color: white; color: #0f172a; font-weight: bold; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+        .main-tab-btn:not(.active) { color: #cbd5e1; }
+        .main-tab-btn:not(.active):hover { color: white; background-color: rgba(255,255,255,0.1); }
+        
+        /* 国家高亮悬停效果 */
+        .country-path { transition: fill 0.3s ease, stroke 0.3s ease, fill-opacity 0.3s ease; }
+        .country-path:hover { filter: brightness(1.15) saturate(1.2); cursor: pointer; }
+        
+        /* 抓手光标 (用于拖拽) */
+        .grab-cursor { cursor: grab; }
+        .grab-cursor:active { cursor: grabbing; }
+
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans min-h-screen flex flex-col selection:bg-blue-200">
+
+    <!-- 顶部导航 -->
+    <header class="bg-slate-900 text-white shadow-xl z-20 relative">
+        <div class="absolute inset-0 overflow-hidden pointer-events-none">
+            <div class="absolute -top-[100px] -right-[100px] w-96 h-96 bg-blue-600/20 rounded-full blur-3xl"></div>
+        </div>
+        <div class="container mx-auto px-4 py-4 relative z-10">
+            <div class="flex flex-col lg:flex-row justify-between items-center gap-5">
+                <div class="flex items-center gap-3">
+                    <svg class="w-9 h-9 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    <div>
+                        <h1 class="text-2xl font-bold tracking-wide">地图投影原理可视化系统</h1>
+                        <p class="text-xs text-blue-300 opacity-80 mt-0.5 font-mono">Map Projections Interactive Visualization System</p>
+                    </div>
+                </div>
+
+                <!-- 核心模块切换 -->
+                <div class="bg-slate-800/80 backdrop-blur p-1.5 rounded-xl flex gap-1 border border-slate-700 shadow-inner">
+                    <button class="main-tab-btn active px-5 py-2 rounded-lg text-sm transition-all flex items-center gap-2" onclick="switchMainTab('2d')">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path></svg>
+                        2D 展开变形分析
+                    </button>
+                    <button class="main-tab-btn px-5 py-2 rounded-lg text-sm transition-all flex items-center gap-2" onclick="switchMainTab('3d')">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5"></path></svg>
+                        3D 几何面构成原理
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 2D 模式二级菜单 -->
+        <div id="subnav-2d" class="container mx-auto px-4 py-3 border-t border-slate-700/80 relative z-10 bg-slate-900/50 backdrop-blur-sm">
+            <div class="flex flex-wrap justify-center gap-2" id="nav-buttons"></div>
+        </div>
+    </header>
+
+    <!-- 主内容区：2D 投影展开变形 -->
+    <main id="view-2d" class="flex-grow container mx-auto px-4 py-8 flex flex-col xl:flex-row gap-8">
+        <!-- 左侧：地图画布区 -->
+        <div class="xl:w-2/3 flex flex-col gap-4">
+            <div class="bg-white rounded-2xl shadow-xl p-2 border border-slate-200 relative overflow-hidden flex-grow min-h-[500px] xl:min-h-[600px] flex items-center justify-center group">
+                
+                <div class="absolute top-4 right-4 bg-white/95 backdrop-blur p-1.5 rounded-lg shadow-md border border-slate-200 flex gap-1 z-10 transition-transform">
+                    <button class="mode-btn px-3 py-1.5 text-sm rounded-md" data-mode="ellipse" onclick="setDisplayMode('ellipse')">变形椭圆</button>
+                    <button class="mode-btn active px-3 py-1.5 text-sm rounded-md" data-mode="map" onclick="setDisplayMode('map')">
+                        <span id="map-loading" class="mr-1 animate-spin inline-block">⏳</span>世界地图
+                    </button>
+                </div>
+
+                <!-- 浮动操作栏：悬浮缩放按钮 (2D) -->
+                <div class="absolute bottom-4 right-4 z-10 flex flex-col shadow-lg rounded-xl overflow-hidden border border-slate-200 bg-white/95 backdrop-blur opacity-90 hover:opacity-100 transition-opacity">
+                    <button onclick="zoomIn2D()" class="p-2.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="放大 (Zoom In)">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                    </button>
+                    <div class="h-px bg-slate-200"></div>
+                    <button onclick="zoomOut2D()" class="p-2.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="缩小 (Zoom Out)">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"></path></svg>
+                    </button>
+                    <div class="h-px bg-slate-200"></div>
+                    <button onclick="resetZoom2D()" class="p-2.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="复位视角 (Reset View)">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path></svg>
+                    </button>
+                </div>
+
+                <!-- 专业坐标显示器 -->
+                <div class="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 bg-slate-900/80 text-white px-4 py-1.5 rounded-full text-xs font-mono tracking-wider shadow-md backdrop-blur-sm hidden md:flex items-center gap-2 pointer-events-none">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span id="coord-display">经度: 0.00° | 纬度: 0.00°</span>
+                </div>
+
+                <!-- 核心 D3 渲染容器 -->
+                <div id="map-container" class="w-full h-full flex items-center justify-center relative grab-cursor"></div>
+                
+                <!-- 图例区 -->
+                <div id="legend-ellipse" class="absolute bottom-4 left-4 bg-white/95 backdrop-blur px-4 py-3 rounded-xl shadow-lg border border-slate-200 text-sm hidden pointer-events-none transition-opacity z-10">
+                    <h4 class="font-bold text-slate-800 mb-2 border-b border-slate-100 pb-1.5 flex items-center gap-1.5">
+                        <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        变形特征图例 (缇索椭圆)
+                    </h4>
+                    <div class="flex items-center gap-2 mb-2"><div class="w-6 h-px bg-slate-400"></div><span class="text-slate-600 font-medium">经纬网 (基准坐标)</span></div>
+                    <div class="flex items-center gap-2"><div class="w-4 h-4 rounded-full bg-red-500/40 border border-red-500 flex-shrink-0"></div><span class="text-slate-600 font-medium">变形指示椭圆</span></div>
+                    <p class="text-xs text-slate-500 mt-2 max-w-[200px] leading-relaxed border-t border-slate-50 pt-2">注：图上红圈均由地球上等面积的<b>标准正圆</b>投影而来。形状偏离正圆代表<b>角度变形</b>，面积改变代表<b>面积变形</b>。</p>
+                </div>
+
+                <div id="legend-map" class="absolute bottom-4 left-4 bg-white/95 backdrop-blur px-4 py-3 rounded-xl shadow-lg border border-slate-200 text-sm pointer-events-none transition-opacity z-10">
+                    <h4 class="font-bold text-slate-800 mb-2 border-b border-slate-100 pb-1.5 flex items-center gap-1.5">
+                        <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path></svg>
+                        地图交互图例
+                    </h4>
+                    <div class="flex items-center gap-2 mb-2"><div class="w-5 h-4 bg-[#ef4444] border border-[#991b1b] rounded shadow-inner opacity-90 flex-shrink-0"></div><span class="text-slate-600 font-medium">中国 (高亮参照区)</span></div>
+                    <div class="flex items-center gap-2 mb-2"><div class="w-5 h-4 bg-[#3b82f6] border border-[#1d4ed8] rounded shadow-inner opacity-90 flex-shrink-0"></div><span class="text-slate-600 font-medium">自定义选中区域</span></div>
+                    <p class="text-xs text-slate-500 mt-2 max-w-[220px] leading-relaxed border-t border-slate-50 pt-2">
+                        💡 支持鼠标拖拽平移，右下角控件缩放。点击任意国家可高亮其投影轮廓。
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：信息面板 -->
+        <div class="xl:w-1/3 bg-white rounded-2xl shadow-xl p-8 border border-slate-200 relative overflow-hidden h-fit flex flex-col max-h-[800px]">
+            <div class="absolute -right-16 -top-16 w-48 h-48 bg-blue-50 rounded-full blur-3xl opacity-60 pointer-events-none"></div>
+            <div id="info-panel" class="relative z-10 fade-in overflow-y-auto pr-2">
+                <h2 id="proj-name" class="text-3xl font-extrabold text-slate-800 mb-2 leading-tight tracking-tight"></h2>
+                <div class="mb-6 flex gap-2">
+                    <span id="proj-type" class="inline-block bg-blue-100 text-blue-800 text-sm px-3 py-1 rounded-md font-bold shadow-sm border border-blue-200/50"></span>
+                </div>
+                
+                <div class="space-y-5">
+                    <div class="bg-slate-50/80 p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                        <h3 class="text-md font-bold pb-2 mb-2 text-slate-800 border-b border-slate-200 flex items-center">
+                            <span class="bg-blue-100 text-blue-600 p-1.5 rounded-lg mr-2.5 shadow-sm"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg></span>
+                            投影形态与几何特点
+                        </h3>
+                        <p id="proj-features" class="text-slate-600 text-sm leading-relaxed text-justify"></p>
+                    </div>
+                    <div class="bg-slate-50/80 p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                        <h3 class="text-md font-bold pb-2 mb-2 text-slate-800 border-b border-slate-200 flex items-center">
+                            <span class="bg-red-100 text-red-600 p-1.5 rounded-lg mr-2.5 shadow-sm"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg></span>
+                            主要变形规律分析
+                        </h3>
+                        <p id="proj-distortion" class="text-slate-600 text-sm leading-relaxed text-justify"></p>
+                    </div>
+                    <div class="bg-slate-50/80 p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                        <h3 class="text-md font-bold pb-2 mb-2 text-slate-800 border-b border-slate-200 flex items-center">
+                            <span class="bg-emerald-100 text-emerald-600 p-1.5 rounded-lg mr-2.5 shadow-sm"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.25 2.25v2.5a.75.75 0 00.75.75h16a.75.75 0 00.75-.75v-2.5a.75.75 0 00-.75-.75h-16a.75.75 0 00-.75.75zm1.5 5.5v11.5a1.5 1.5 0 001.5 1.5h11.5a1.5 1.5 0 001.5-1.5V7.75h-14.5z"></path></svg></span>
+                            主要应用领域
+                        </h3>
+                        <p id="proj-usage" class="text-slate-600 text-sm leading-relaxed text-justify"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 主内容区：3D 几何投影面解析 -->
+    <main id="view-3d" class="flex-grow container mx-auto px-4 py-8 flex flex-col xl:flex-row gap-8 hidden">
+        <!-- 3D 渲染区域 -->
+        <div class="xl:w-2/3 flex flex-col gap-4">
+            <div class="bg-[#0a0f1d] rounded-2xl shadow-2xl border border-slate-700 relative overflow-hidden flex-grow min-h-[500px] xl:min-h-[600px] flex items-center justify-center">
+                <!-- 3D Canvas 容器 -->
+                <div id="canvas-3d-container" class="w-full h-full absolute inset-0 cursor-move"></div>
+                
+                <!-- 3D 提示信息 -->
+                <div class="absolute bottom-4 left-4 bg-slate-800/80 text-slate-200 backdrop-blur-md px-4 py-3 rounded-xl shadow-lg border border-slate-600/50 text-sm pointer-events-none">
+                    <p class="flex items-center gap-2 font-medium">
+                        <svg class="w-5 h-5 text-blue-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122"></path></svg> 
+                        <span>按住左键拖拽可全方位旋转视角考察相切面。</span><br/>
+                    </p>
+                    <span class="text-xs text-slate-400 mt-1 block">注意球体中心的“高亮核心”，它代表地图投影透视的真实物理光源点。</span>
+                </div>
+
+                <!-- 浮动操作栏：悬浮缩放按钮 (3D) -->
+                <div class="absolute bottom-4 right-4 z-10 flex flex-col shadow-lg rounded-xl overflow-hidden border border-slate-600/50 bg-slate-800/80 backdrop-blur-md">
+                    <button id="btn-toggle-rotate" onclick="toggle3DRotation()" class="p-2.5 text-emerald-400 hover:text-white hover:bg-slate-700 transition-colors" title="暂停/恢复自转">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </button>
+                    <div class="h-px bg-slate-600/50"></div>
+                    <button onclick="zoomIn3D()" class="p-2.5 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors" title="放大">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                    </button>
+                    <div class="h-px bg-slate-600/50"></div>
+                    <button onclick="zoomOut3D()" class="p-2.5 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors" title="缩小">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"></path></svg>
+                    </button>
+                    <div class="h-px bg-slate-600/50"></div>
+                    <button onclick="resetView3D()" class="p-2.5 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors" title="复位视角">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3D 控制面板 -->
+        <div class="xl:w-1/3 bg-white rounded-2xl shadow-xl p-8 border border-slate-200 relative h-fit">
+            <h2 class="text-2xl font-extrabold text-slate-800 mb-6 border-b pb-4">空间几何面构成设置</h2>
+            
+            <div class="space-y-8">
+                <!-- 步骤 1 -->
+                <div>
+                    <h3 class="text-md font-bold text-slate-700 mb-3 flex items-center gap-2">
+                        <span class="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-600 text-sm">1</span> 
+                        选择投影几何面
+                    </h3>
+                    <div class="grid grid-cols-3 gap-3">
+                        <button class="btn-3d-shape p-3 rounded-xl bg-blue-50 text-blue-700 border-2 border-blue-400 font-bold shadow-sm transition-all hover:shadow-md" onclick="set3DShape('plane')">方位投影<br/><span class="text-xs font-normal opacity-70 mt-1 block">(平面)</span></button>
+                        <button class="btn-3d-shape p-3 rounded-xl bg-slate-50 text-slate-600 border-2 border-slate-200 font-medium transition-all hover:border-slate-300 hover:bg-slate-100" onclick="set3DShape('cylinder')">圆柱投影<br/><span class="text-xs font-normal opacity-70 mt-1 block">(圆柱面)</span></button>
+                        <button class="btn-3d-shape p-3 rounded-xl bg-slate-50 text-slate-600 border-2 border-slate-200 font-medium transition-all hover:border-slate-300 hover:bg-slate-100" onclick="set3DShape('cone')">圆锥投影<br/><span class="text-xs font-normal opacity-70 mt-1 block">(圆锥面)</span></button>
+                    </div>
+                </div>
+
+                <!-- 步骤 2 -->
+                <div>
+                    <h3 class="text-md font-bold text-slate-700 mb-3 flex items-center gap-2">
+                        <span class="flex items-center justify-center w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 text-sm">2</span> 
+                        选择几何面轴向
+                    </h3>
+                    <div class="grid grid-cols-3 gap-3">
+                        <button class="btn-3d-axis p-3 rounded-xl bg-indigo-50 text-indigo-700 border-2 border-indigo-400 font-bold shadow-sm transition-all hover:shadow-md" onclick="set3DAxis('normal')">正轴<br/><span class="text-xs font-normal opacity-70 mt-1 block">(重合地轴)</span></button>
+                        <button class="btn-3d-axis p-3 rounded-xl bg-slate-50 text-slate-600 border-2 border-slate-200 font-medium transition-all hover:border-slate-300 hover:bg-slate-100" onclick="set3DAxis('transverse')">横轴<br/><span class="text-xs font-normal opacity-70 mt-1 block">(垂直地轴)</span></button>
+                        <button class="btn-3d-axis p-3 rounded-xl bg-slate-50 text-slate-600 border-2 border-slate-200 font-medium transition-all hover:border-slate-300 hover:bg-slate-100" onclick="set3DAxis('oblique')">斜轴<br/><span class="text-xs font-normal opacity-70 mt-1 block">(斜交夹角)</span></button>
+                    </div>
+                </div>
+
+                <!-- 原理动态解释 -->
+                <div class="bg-gradient-to-br from-slate-50 to-blue-50 p-5 rounded-xl border border-blue-100 shadow-inner">
+                    <h3 class="text-sm font-bold text-blue-900 mb-3 flex items-center border-b border-blue-200/50 pb-2">
+                        <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+                        对应教材原理解析
+                    </h3>
+                    <p id="desc-3d-shape" class="text-slate-700 text-sm leading-relaxed mb-2 font-semibold"></p>
+                    <p id="desc-3d-axis" class="text-slate-600 text-sm leading-relaxed"></p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 页脚署名区 -->
+    <footer class="bg-slate-900 border-t border-slate-800 text-center py-6 mt-auto">
+        <p class="text-slate-400 text-sm tracking-wide font-medium">
+            基于 D3.js & Three.js 核心驱动的专业地理信息可视化呈现
+        </p>
+        <p class="text-slate-500 text-xs mt-2 font-mono">
+            Final Assignment Submission | Designed & Coded for GIS Course
+        </p>
+    </footer>
+
+    <!-- 交互提示 Tooltip -->
+    <div id="map-tooltip" class="fixed hidden bg-slate-900 text-white text-xs px-3 py-2 rounded-lg shadow-2xl pointer-events-none z-[100] border border-slate-700 font-medium transition-opacity"></div>
+
+    <script>
+        // ==========================================
+        // 模块 1：系统 UI 控制逻辑
+        // ==========================================
+        let currentMainTab = '2d';
+
+        function switchMainTab(tab) {
+            currentMainTab = tab;
+            document.querySelectorAll('.main-tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.onclick.toString().includes(tab));
+            });
+            
+            document.getElementById('view-2d').classList.toggle('hidden', tab !== '2d');
+            document.getElementById('subnav-2d').classList.toggle('hidden', tab !== '2d');
+            document.getElementById('view-3d').classList.toggle('hidden', tab !== '3d');
+
+            if(tab === '3d' && renderer3D) setTimeout(resize3D, 50);
+        }
+
+        // ==========================================
+        // 模块 2：2D D3.js 投影与展开解析 (支持无极缩放与逆投影)
+        // ==========================================
+        const SVG_WIDTH = 900, SVG_HEIGHT = 500;
+        let currentKey = 'mercator', currentMode = 'map'; 
+        let worldGeoJson = null;
+        const highlightedCountries = new Set(['China']);
+
+        // 严谨学术配置，scale 参数已完美校准确保视野最佳
+        const projectionsData = {
+            mercator: {
+                name: '墨卡托投影', fullname: '墨卡托投影 (正轴等角圆柱)', type: '正轴等角圆柱投影',
+                features: '经纬线正交成矩形网格，经线等距平行，纬线间距向两极急剧扩大。',
+                distortion: '【角度不变，面积剧变】角度变形为零。面积变形极大，高纬度地区被严重放大（对应3D模式：正轴圆柱）。',
+                usage: '航海图（等角航线为直线）、航空图、各类主流在线地图服务（如百度、高德）。',
+                getProj: () => d3.geoMercator().scale(75).translate([SVG_WIDTH/2, SVG_HEIGHT/2 + 20])
+            },
+            gauss: {
+                name: '高斯-克吕格', fullname: '高斯-克吕格投影 (横轴等角圆柱)', type: '横轴等角切椭圆柱投影',
+                features: '中央经线和赤道为垂直正交直线，其余经纬线为对称平滑曲线。',
+                distortion: '【中央保角，边缘放大】中央经线无变形。离开中央经线越远，面积和距离放大越剧烈（对应3D模式：横轴圆柱）。',
+                usage: '我国国家基本比例尺地形图（1:1万 - 1:50万）、国家平面控制网计算。',
+                getProj: () => d3.geoTransverseMercator().scale(80).translate([SVG_WIDTH/2, SVG_HEIGHT/2]).clipAngle(85)
+            },
+            lambert: {
+                name: '兰伯特投影', fullname: '兰伯特投影 (正轴等角圆锥)', type: '正轴等角割圆锥投影',
+                features: '经线为放射状直线束，纬线为同心圆弧。全球平铺呈现出优雅的扇形展开。',
+                distortion: '【保角圆锥】保持角度绝对正确。两条标准纬线上无变形，两线之间面积微缩，外侧面积急剧放大（对应3D模式：正轴圆锥）。',
+                usage: '中国（1:100万地形图）、美国等中纬度且东西延伸型国家的全国政区图和气象图。',
+                getProj: () => d3.geoConicConformal().parallels([20, 60]).scale(90).translate([SVG_WIDTH/2, SVG_HEIGHT/2 + 30])
+            },
+            azimuthal: {
+                name: '极地方位', fullname: '极平面对心投影 (正轴方位)', type: '正轴等角方位投影',
+                features: '以极点为切点中心，经线为放射状直线，纬线为同心圆。',
+                distortion: '【中心点无变形】投影中心（极点处）无变形，离中心越远，向外的面积和形状拉伸极其严重（对应3D模式：正轴平面）。',
+                usage: '两极地区科学考察地图、航空航天测控中心显示图。',
+                getProj: () => d3.geoStereographic().scale(150).translate([SVG_WIDTH/2, SVG_HEIGHT/2]).rotate([0, -90]).clipAngle(90)
+            },
+            robinson: {
+                name: '罗宾逊投影', fullname: '罗宾逊投影 (伪圆柱)', type: '任意性质伪圆柱投影',
+                features: '整体轮廓呈圆润桶形。中央经线为直线，其他经线为平滑曲线。极点被合理压缩为一条平滑短线。',
+                distortion: '【折中调和】非等角也非等积。该投影放弃了绝对保角或保面积，采用数学折中法让世界大陆形状看起来最协调。',
+                usage: '教科书世界地图插图、新闻媒体全球科学宏观展示。',
+                getProj: () => d3.geoRobinson().scale(130).translate([SVG_WIDTH/2, SVG_HEIGHT/2])
+            },
+            mollweide: {
+                name: '摩尔魏德投影', fullname: '摩尔魏德投影 (等积伪圆柱)', type: '等积伪圆柱投影',
+                features: '全球外轮廓为一个完美的数学椭圆，长轴（赤道）正好是短轴（中央经线）的两倍。',
+                distortion: '【绝对保积，边缘形变严重】全球各处面积比例保持严格一致。但为维持等积，高纬度和边缘区域形状被剧烈挤压拉伸。',
+                usage: '全球气候异常分布图、人口密度图、植被分布等必须精准对比面积的科学统计地图。',
+                getProj: () => d3.geoMollweide().scale(145).translate([SVG_WIDTH/2, SVG_HEIGHT/2])
+            }
+        };
+
+        const svg = d3.select("#map-container").append("svg").attr("viewBox", `0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`)
+                      .attr("class", "w-full h-full drop-shadow-md overflow-hidden rounded-xl");
+        
+        // 缩放控制层
+        const gMain = svg.append("g");
+        
+        const gBackground = gMain.append("g").style("pointer-events", "none");
+        const gMap = gMain.append("g");
+        const gEllipse = gMain.append("g").style("pointer-events", "none");
+        const gOutline = gMain.append("g").style("pointer-events", "none");
+
+        // D3 缩放器 (Zoom) - 拦截滚轮，只允许拖拽
+        const zoom = d3.zoom()
+            .scaleExtent([0.8, 8])
+            .on("zoom", (event) => {
+                gMain.attr("transform", event.transform);
+            });
+        
+        svg.call(zoom)
+           .on("wheel.zoom", null) // 彻底禁用滚轮缩放防止页面翻动冲突
+           .on("dblclick.zoom", null);
+
+        window.zoomIn2D = function() { svg.transition().duration(300).call(zoom.scaleBy, 1.5); }
+        window.zoomOut2D = function() { svg.transition().duration(300).call(zoom.scaleBy, 0.667); }
+        window.resetZoom2D = function() { svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity); }
+
+        const graticule = d3.geoGraticule();
+        const pathGraticule = gBackground.append("path").datum(graticule()).attr("fill", "none").attr("stroke", "#cbd5e1").attr("stroke-width", 0.5);
+        const pathOutline = gOutline.append("path").datum(graticule.outline()).attr("fill", "none").attr("stroke", "#64748b").attr("stroke-width", 1.5);
+
+        // 生成缇索椭圆
+        const indicatrices = [];
+        for (let lat = -60; lat <= 60; lat += 30) {
+            for (let lon = -150; lon <= 150; lon += 60) { indicatrices.push(d3.geoCircle().center([lon, lat]).radius(6)()); }
+        }
+        const pathEllipses = gEllipse.selectAll(".tissot-path").data(indicatrices).enter().append("path").attr("class", "tissot-path")
+            .attr("fill", "rgba(239, 68, 68, 0.4)").attr("stroke", "#dc2626").attr("stroke-width", 1);
+        gEllipse.style("opacity", 0);
+
+        function getCountryStyle(name, isChina) {
+            const isHighlighted = highlightedCountries.has(name);
+            if (isChina) return isHighlighted ? { fill: '#ef4444', stroke: '#991b1b', opacity: 0.9 } : { fill: '#6ee7b7', stroke: '#059669', opacity: 0.5 };
+            else return isHighlighted ? { fill: '#3b82f6', stroke: '#1d4ed8', opacity: 0.9 } : { fill: '#6ee7b7', stroke: '#059669', opacity: 0.5 };
+        }
+
+        async function fetchWorldData() {
+            try {
+                // 使用官方且稳定的 TopoJSON 数据
+                const response = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
+                const world = await response.json();
+                worldGeoJson = topojson.feature(world, world.objects.countries);
+                document.getElementById('map-loading').style.display = 'none';
+
+                gMap.selectAll(".country-path").data(worldGeoJson.features).enter().append("path")
+                    .attr("class", "country-path outline-none")
+                    .attr("data-name", d => d.properties.name).attr("stroke-width", 0.5).attr("stroke-linejoin", "round")
+                    .each(function(d) {
+                        const isChina = (d.id === '156' || d.id === 'CHN' || d.properties.name === 'China');
+                        const style = getCountryStyle(d.properties.name, isChina);
+                        d3.select(this).attr("fill", style.fill).attr("stroke", style.stroke).attr("fill-opacity", style.opacity);
+                    })
+                    .on("click", function(event, d) {
+                        const name = d.properties.name;
+                        if (!name) return;
+                        highlightedCountries.has(name) ? highlightedCountries.delete(name) : highlightedCountries.add(name);
+                        gMap.selectAll(`.country-path`).filter(pd => pd.properties.name === name).each(function(pd) {
+                            const style = getCountryStyle(name, pd.id === '156' || pd.properties.name === 'China');
+                            d3.select(this).transition().duration(200).attr("fill", style.fill).attr("stroke", style.stroke).attr("fill-opacity", style.opacity);
+                        });
+                    })
+                    .on("mousemove", function(event, d) {
+                        const tooltip = document.getElementById('map-tooltip');
+                        tooltip.textContent = d.properties.name === 'China' ? '中国 (China)' : (d.properties.name || "Unknown");
+                        tooltip.style.left = (event.pageX + 15) + 'px'; tooltip.style.top = (event.pageY + 15) + 'px';
+                        tooltip.classList.remove('hidden');
+                    })
+                    .on("mouseout", () => document.getElementById('map-tooltip').classList.add('hidden'));
+
+                updateMapPaths();
+            } catch (error) { console.error("数据获取失败:", error); }
+        }
+
+        function updateMapPaths() {
+            const pathGen = d3.geoPath().projection(projectionsData[currentKey].getProj());
+            const t = d3.transition().duration(800).ease(d3.easeCubicInOut);
+            pathGraticule.transition(t).attr("d", pathGen);
+            pathOutline.transition(t).attr("d", pathGen);
+            pathEllipses.transition(t).attr("d", d => pathGen(d) || "");
+            if (worldGeoJson) gMap.selectAll(".country-path").transition(t).attr("d", d => pathGen(d) || "");
+        }
+
+        // [绝杀功能]：实时坐标拾取运算 (逆投影解算)
+        svg.on("mousemove", function(event) {
+            // 获取基于 gMain 的相对坐标 (处理缩放和平移的影响)
+            const [x, y] = d3.pointer(event, gMain.node());
+            const proj = projectionsData[currentKey].getProj();
+            // 投影逆运算，将屏幕 x, y 转换为经度纬度
+            const coords = proj.invert ? proj.invert([x, y]) : null;
+            
+            if (coords && !isNaN(coords[0]) && !isNaN(coords[1])) {
+                let lon = coords[0];
+                let lat = coords[1];
+                // 修正经度范围到 -180 ~ 180
+                while(lon > 180) lon -= 360;
+                while(lon < -180) lon += 360;
+                
+                const lonStr = (lon >= 0 ? "E " : "W ") + Math.abs(lon).toFixed(2);
+                const latStr = (lat >= 0 ? "N " : "S ") + Math.abs(lat).toFixed(2);
+                document.getElementById('coord-display').textContent = `经度: ${lonStr}° | 纬度: ${latStr}°`;
+            }
+        });
+
+        window.setDisplayMode = function(mode) {
+            currentMode = mode;
+            document.querySelectorAll('.mode-btn').forEach(btn => { 
+                if(btn.dataset.mode === mode) { btn.classList.add('active'); btn.classList.remove('border-transparent');}
+                else { btn.classList.remove('active'); btn.classList.add('border-transparent');}
+            });
+            document.getElementById('legend-ellipse').style.display = mode === 'ellipse' ? 'block' : 'none';
+            document.getElementById('legend-map').style.display = mode === 'map' ? 'block' : 'none';
+            gMap.transition().duration(400).style("opacity", mode === 'map' ? 1 : 0);
+            gMap.style("pointer-events", mode === 'map' ? 'auto' : 'none');
+            gEllipse.transition().duration(400).style("opacity", mode === 'ellipse' ? 1 : 0);
+        };
+
+        function updateView(key) {
+            currentKey = key;
+            const data = projectionsData[key];
+            document.querySelectorAll('.nav-btn').forEach(btn => { btn.classList.toggle('active', btn.dataset.key === key); });
+            
+            resetZoom2D();
+
+            const infoPanel = document.getElementById('info-panel');
+            infoPanel.classList.remove('fade-in');
+            
+            setTimeout(() => {
+                document.getElementById('proj-name').textContent = data.fullname;
+                document.getElementById('proj-type').textContent = data.type;
+                document.getElementById('proj-features').innerHTML = data.features;
+                
+                let distText = data.distortion.replace(/【(.*?)】/g, '<span class="text-red-600 font-bold bg-red-50 px-1.5 py-0.5 rounded mr-1.5 border border-red-100">[$1]</span>');
+                document.getElementById('proj-distortion').innerHTML = distText;
+                
+                document.getElementById('proj-usage').textContent = data.usage;
+                infoPanel.classList.add('fade-in');
+                updateMapPaths();
+            }, 50);
+        }
+
+        // ==========================================
+        // 模块 3：3D 原理展示 (Three.js 核心升级版)
+        // ==========================================
+        let scene3D, camera3D, renderer3D, controls3D;
+        let pivotGroup, currentSurfaceMesh;
+        const R = 10; 
+        
+        let state3D = { shape: 'plane', axis: 'normal' };
+        let isAutoRotate = true;
+
+        const textData3D = {
+            shape: {
+                plane: "【方位投影 Plane / Azimuthal】<br/><br/>以<span class='font-bold text-blue-700'>平面</span>作为投影面。将平面与地球体相切或相割，将地球表面通过透视法则投影到这块平面上。这种投影法极其适合用于表示极地考察或整个单一的半球制图。",
+                cylinder: "【圆柱投影 Cylinder】<br/><br/>以<span class='font-bold text-blue-700'>圆柱面</span>作为投影面。假设用一个圆柱面包裹住整个地球，将经纬网投射上去后，再将圆柱面沿母线剪开铺平。它是当今世界地图（如墨卡托投影）最基础、最核心的构成原理。",
+                cone: "【圆锥投影 Cone】<br/><br/>以<span class='font-bold text-blue-700'>圆锥面</span>作为投影面。将圆锥体与地球体相切或相割，展平后呈现扇形。由于其变形规律特别适合，它是中纬度沿东西方向延伸的国家（如中国、美国）编制全国地图的首选法则。"
+            },
+            axis: {
+                normal: "【正轴 Normal】<br/><br/>投影几何面的中心对称轴与地球的自转轴（南北极地轴）<span class='font-bold text-indigo-600'>完全重合</span>。它是最经典的基础相对位置结构，经纬网投影后最为规则。",
+                transverse: "【横轴 Transverse】<br/><br/>投影几何面的中心对称轴与地球自转轴呈 <span class='font-bold text-indigo-600'>90 度垂直</span>关系（即投影轴躺在赤道面上）。我国国家标准《高斯-克吕格投影》使用的正是横轴圆柱投影原理。",
+                oblique: "【斜轴 Oblique】<br/><br/>投影几何面的中心对称轴与地球自转轴呈<span class='font-bold text-indigo-600'>任意倾斜锐角</span>斜交。在实际应用中，通常用于测绘特定的斜向延伸航线图或特定地理构造图。"
+            }
+        };
+
+        function init3D() {
+            const container = document.getElementById('canvas-3d-container');
+            
+            scene3D = new THREE.Scene();
+            scene3D.background = new THREE.Color(0x0a0f1d); 
+            scene3D.fog = new THREE.FogExp2(0x0a0f1d, 0.015);
+
+            camera3D = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera3D.position.set(0, 18, 40);
+
+            renderer3D = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+            renderer3D.setSize(container.clientWidth, container.clientHeight);
+            renderer3D.setPixelRatio(window.devicePixelRatio);
+            renderer3D.outputEncoding = THREE.sRGBEncoding;
+            container.appendChild(renderer3D.domElement);
+
+            controls3D = new THREE.OrbitControls(camera3D, renderer3D.domElement);
+            controls3D.enableDamping = true;
+            controls3D.dampingFactor = 0.05;
+            controls3D.autoRotate = isAutoRotate; 
+            controls3D.autoRotateSpeed = 0.8;
+            controls3D.enableZoom = false; // 禁用鼠标滚轮，用界面按钮代替
+
+            scene3D.add(new THREE.AmbientLight(0xffffff, 0.4));
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+            directionalLight.position.set(20, 30, 20);
+            scene3D.add(directionalLight);
+            
+            // [绝杀功能]：代表投影中心的发光点，还原真实物理透视本质
+            const coreLight = new THREE.PointLight(0x60a5fa, 1.5, 50);
+            coreLight.position.set(0,0,0);
+            scene3D.add(coreLight);
+
+            const earthGroup = new THREE.Group();
+            
+            // 地球核心透视点
+            const coreGeom = new THREE.SphereGeometry(0.3, 16, 16);
+            const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            earthGroup.add(new THREE.Mesh(coreGeom, coreMat));
+
+            // 地球表面外壳
+            const sphereGeom = new THREE.SphereGeometry(R, 32, 16);
+            const sphereMat = new THREE.MeshPhysicalMaterial({ 
+                color: 0x0f172a, transparent: true, opacity: 0.65, 
+                roughness: 0.2, metalness: 0.5, clearcoat: 1.0
+            });
+            earthGroup.add(new THREE.Mesh(sphereGeom, sphereMat));
+
+            // 经纬网
+            const wireframeGeom = new THREE.WireframeGeometry(sphereGeom);
+            const wireframeMat = new THREE.LineBasicMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.4 });
+            earthGroup.add(new THREE.LineSegments(wireframeGeom, wireframeMat));
+
+            // 地轴
+            const axisGeom = new THREE.CylinderGeometry(0.15, 0.15, R * 2.8, 8);
+            const axisMat = new THREE.MeshBasicMaterial({ color: 0xf87171 });
+            earthGroup.add(new THREE.Mesh(axisGeom, axisMat));
+            
+            scene3D.add(earthGroup);
+
+            pivotGroup = new THREE.Group();
+            scene3D.add(pivotGroup);
+
+            update3DGeometry();
+            
+            function animate() {
+                requestAnimationFrame(animate);
+                if (currentMainTab === '3d') {
+                    controls3D.update();
+                    renderer3D.render(scene3D, camera3D);
+                }
+            }
+            animate();
+        }
+
+        function update3DGeometry() {
+            // 安全清除旧资源，防止内存泄漏卡顿
+            if (currentSurfaceMesh) {
+                pivotGroup.remove(currentSurfaceMesh);
+                currentSurfaceMesh.traverse(function(child) {
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) {
+                        if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                        else child.material.dispose();
+                    }
+                });
+            }
+
+            const surfaceMat = new THREE.MeshPhysicalMaterial({
+                color: 0xfef08a, transparent: true, opacity: 0.3, 
+                side: THREE.DoubleSide, depthWrite: false, roughness: 0.2, metalness: 0.1
+            });
+            const edgesMat = new THREE.LineBasicMaterial({ color: 0xeab308, linewidth: 2 });
+
+            const group = new THREE.Group();
+            let geometry;
+
+            if (state3D.shape === 'plane') {
+                geometry = new THREE.PlaneGeometry(32, 32);
+                const mesh = new THREE.Mesh(geometry, surfaceMat);
+                mesh.rotation.x = -Math.PI / 2;
+                mesh.position.y = R + 0.1; 
+                group.add(mesh);
+                
+                const edges = new THREE.EdgesGeometry(geometry);
+                const line = new THREE.LineSegments(edges, edgesMat);
+                line.rotation.x = -Math.PI / 2;
+                line.position.y = R + 0.1;
+                group.add(line);
+                
+            } else if (state3D.shape === 'cylinder') {
+                geometry = new THREE.CylinderGeometry(R + 0.3, R + 0.3, 28, 32, 1, true);
+                const mesh = new THREE.Mesh(geometry, surfaceMat);
+                group.add(mesh);
+                
+                const edges = new THREE.EdgesGeometry(geometry);
+                group.add(new THREE.LineSegments(edges, edgesMat));
+                
+            } else if (state3D.shape === 'cone') {
+                const tangentAngle = Math.PI / 4;
+                const apexY = R / Math.sin(tangentAngle); 
+                const height = 24; 
+                const baseRadius = height * Math.tan(tangentAngle); 
+                
+                geometry = new THREE.CylinderGeometry(0, baseRadius, height, 32, 1, true);
+                const mesh = new THREE.Mesh(geometry, surfaceMat);
+                mesh.position.y = apexY - height / 2; 
+                group.add(mesh);
+                
+                const edges = new THREE.EdgesGeometry(geometry);
+                const line = new THREE.LineSegments(edges, edgesMat);
+                line.position.y = apexY - height / 2;
+                group.add(line);
+            }
+
+            currentSurfaceMesh = group;
+            pivotGroup.add(currentSurfaceMesh);
+
+            // 空间翻转轴向
+            if (state3D.axis === 'normal') {
+                pivotGroup.rotation.set(0, 0, 0); 
+            } else if (state3D.axis === 'transverse') {
+                pivotGroup.rotation.set(0, 0, Math.PI / 2); 
+            } else if (state3D.axis === 'oblique') {
+                pivotGroup.rotation.set(0, 0, Math.PI / 4); 
+            }
+
+            document.getElementById('desc-3d-shape').innerHTML = textData3D.shape[state3D.shape];
+            document.getElementById('desc-3d-axis').innerHTML = textData3D.axis[state3D.axis];
+        }
+
+        window.set3DShape = function(shape) {
+            state3D.shape = shape;
+            document.querySelectorAll('.btn-3d-shape').forEach(btn => {
+                const isActive = btn.onclick.toString().includes(`'${shape}'`);
+                btn.className = isActive 
+                    ? "btn-3d-shape p-3 rounded-xl bg-blue-50 text-blue-700 border-2 border-blue-400 font-bold shadow-sm transition-all transform scale-105"
+                    : "btn-3d-shape p-3 rounded-xl bg-slate-50 text-slate-600 border-2 border-slate-200 font-medium transition-all hover:border-slate-300 hover:bg-slate-100";
+            });
+            update3DGeometry();
+        };
+
+        window.set3DAxis = function(axis) {
+            state3D.axis = axis;
+            document.querySelectorAll('.btn-3d-axis').forEach(btn => {
+                const isActive = btn.onclick.toString().includes(`'${axis}'`);
+                btn.className = isActive 
+                    ? "btn-3d-axis p-3 rounded-xl bg-indigo-50 text-indigo-700 border-2 border-indigo-400 font-bold shadow-sm transition-all transform scale-105"
+                    : "btn-3d-axis p-3 rounded-xl bg-slate-50 text-slate-600 border-2 border-slate-200 font-medium transition-all hover:border-slate-300 hover:bg-slate-100";
+            });
+            update3DGeometry();
+        };
+
+        function resize3D() {
+            if (!camera3D || !renderer3D) return;
+            const container = document.getElementById('canvas-3d-container');
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+            camera3D.aspect = width / height;
+            camera3D.updateProjectionMatrix();
+            renderer3D.setSize(width, height);
+        }
+        window.addEventListener('resize', resize3D);
+
+        // 3D 浮动面板控制逻辑
+        window.zoomIn3D = function() {
+            if (!camera3D || !controls3D) return;
+            const offset = new THREE.Vector3().subVectors(camera3D.position, controls3D.target);
+            offset.multiplyScalar(0.75); 
+            camera3D.position.copy(controls3D.target).add(offset);
+            controls3D.update();
+        };
+
+        window.zoomOut3D = function() {
+            if (!camera3D || !controls3D) return;
+            const offset = new THREE.Vector3().subVectors(camera3D.position, controls3D.target);
+            offset.multiplyScalar(1.25); 
+            camera3D.position.copy(controls3D.target).add(offset);
+            controls3D.update();
+        };
+
+        window.toggle3DRotation = function() {
+            if (!controls3D) return;
+            isAutoRotate = !isAutoRotate;
+            controls3D.autoRotate = isAutoRotate;
+            const btn = document.getElementById('btn-toggle-rotate');
+            if(isAutoRotate){
+                btn.innerHTML = `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>`;
+                btn.title = "暂停自转";
+                btn.classList.remove('text-red-400');
+                btn.classList.add('text-emerald-400');
+            } else {
+                btn.innerHTML = `<svg class="w-5 h-5 ml-0.5" fill="currentColor" viewBox="0 0 20 20"><path d="M4 4l12 6-12 6z"></path></svg>`;
+                btn.title = "恢复自转";
+                btn.classList.remove('text-emerald-400');
+                btn.classList.add('text-red-400');
+            }
+        };
+
+        window.resetView3D = function() {
+            if (!camera3D || !controls3D) return;
+            camera3D.position.set(0, 18, 40);
+            controls3D.target.set(0, 0, 0);
+            controls3D.update();
+        };
+
+        // --- 全局启动入口 ---
+        function init() {
+            const navContainer = document.getElementById('nav-buttons');
+            Object.keys(projectionsData).forEach(key => {
+                const btn = document.createElement('button');
+                btn.className = `nav-btn px-4 py-2 rounded-lg text-sm md:text-base font-medium border border-transparent`;
+                btn.dataset.key = key;
+                btn.textContent = projectionsData[key].name;
+                btn.onclick = () => updateView(key);
+                navContainer.appendChild(btn);
+            });
+
+            // 彻底防止滚动穿透冲突
+            const preventDefaultAction = (e) => e.preventDefault();
+            const canvas3DContainer = document.getElementById('canvas-3d-container');
+            if(canvas3DContainer) {
+                canvas3DContainer.addEventListener('wheel', preventDefaultAction, { passive: false });
+                canvas3DContainer.addEventListener('touchmove', preventDefaultAction, { passive: false });
+            }
+
+            updateView(currentKey);
+            fetchWorldData();
+            init3D();
+        }
+
+        window.addEventListener('DOMContentLoaded', init);
+
+    </script>
+</body>
+</html>
